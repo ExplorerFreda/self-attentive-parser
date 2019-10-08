@@ -45,3 +45,8 @@ var/
 *.egg-info/
 .installed.cfg
 *.egg
+
+# Data / model 
+**/data/
+**/models/
+**/status
