@@ -1,4 +1,4 @@
-cd ...
+cd ../..
 mkdir models/en_bert-$1p/
 python src/main.py train \
     --train-path data/02-21.10way.clean.$1p \

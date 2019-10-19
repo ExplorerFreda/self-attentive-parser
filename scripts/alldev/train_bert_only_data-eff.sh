@@ -1,4 +1,4 @@
-cd ...
+cd ../..
 python src/main.py train \
     --train-path data/02-21.10way.clean.$1p \
     --model-path-base models/en_bert_only/en_bert_only-$1p/model-$2 \
