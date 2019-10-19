@@ -1,5 +1,5 @@
 cd ../..
-mkdir models/en_bert-$1p/
+mkdir models/en_bert/en_bert-$1p/
 python src/main.py train \
     --train-path data/02-21.10way.clean.$1p \
     --model-path-base models/en_bert/en_bert-$1p/model-$2 \
