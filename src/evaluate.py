@@ -77,7 +77,6 @@ def evalb(evalb_dir, gold_trees, predicted_trees, ref_gold_path=None):
         output_path,
     )
     subprocess.run(command, shell=True)
-
     fscore = FScore(math.nan, math.nan, math.nan, math.nan)
     with open(output_path) as infile:
         for line in infile:
@@ -112,3 +111,14 @@ def evalb(evalb_dir, gold_trees, predicted_trees, ref_gold_path=None):
         print("Output path: {}".format(output_path))
 
     return fscore
+
+
+def eval_unlabeled(gold_trees, predicted_trees):
+    from witter.parser import FullEvaluator, Clearer
+    clearer = Clearer(binary=False)
+    evaluator = FullEvaluator(None)
+    gold_trees = [
+        clearer.clear(tree.linearize()) for tree in gold_trees]
+    predicted_trees = [
+        clearer.clear(tree.linearize()) for tree in predicted_trees]
+    return evaluator.evaluate(predicted_trees, gold_trees), gold_trees, predicted_trees

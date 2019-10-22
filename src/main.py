@@ -395,13 +395,14 @@ def run_test(args):
 
     test_fscore = evaluate.evalb(args.evalb_dir, test_treebank, test_predicted, ref_gold_path=ref_gold_path)
 
-    print(
-        "test-fscore {} "
-        "test-elapsed {}".format(
-            test_fscore,
-            format_elapsed(start_time),
-        )
-    )
+    print("labeled-fscore {} ".format(test_fscore))
+
+    (unlabeled_fscore, unlabeled_prec, unlabeled_rec), cleared_test_treebank, cleared_test_predicted = \
+        evaluate.eval_unlabeled(test_treebank, test_predicted)
+    print("unlabeled-fscore {}".format(unlabeled_fscore))
+    for i, sent in enumerate(cleared_test_treebank):
+        print(sent)
+        print(cleared_test_predicted[i])
 
 #%%
 def run_ensemble(args):
