@@ -13,6 +13,7 @@ import trees
 import vocabulary
 import nkutil
 import parse_nk
+from fhsutils import tokens2list, tree2str
 tokens = parse_nk
 
 def torch_load(load_path):
@@ -397,12 +398,19 @@ def run_test(args):
 
     print("labeled-fscore {} ".format(test_fscore))
 
-    (unlabeled_fscore, unlabeled_prec, unlabeled_rec), cleared_test_treebank, cleared_test_predicted = \
-        evaluate.eval_unlabeled(test_treebank, test_predicted)
-    print("unlabeled-fscore {}".format(unlabeled_fscore))
-    for i, sent in enumerate(cleared_test_treebank):
-        print(sent)
-        print(cleared_test_predicted[i])
+    for rm_punct in [True, False]:
+        for compute_level in ["sentence", "corpus"]:
+            clean_test_treebank = [
+                tokens2list(tree.linearize().replace('(', ' ( ').replace(')', ' ) ').split(), rm_punct) for tree in test_treebank
+            ]
+            clean_test_predicted = [
+                tokens2list(tree.linearize().replace('(', ' ( ').replace(')', ' ) ').split(), rm_punct) for tree in test_predicted
+            ]
+            unlabeled_fscore = evaluate.evaluate_unlabeled(clean_test_treebank, clean_test_predicted, compute_level)
+            print("unlabeled-fscore ({} {}) {}".format(rm_punct, compute_level, unlabeled_fscore))
+    for i, sent in enumerate(clean_test_treebank):
+        print(tree2str(sent))
+        print(tree2str(clean_test_predicted[i]))
 
 #%%
 def run_ensemble(args):

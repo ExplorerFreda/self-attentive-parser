@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 
 import trees
+import fhsutils
 
 class FScore(object):
     def __init__(self, recall, precision, fscore, complete_match, tagging_accuracy=100):
@@ -113,12 +114,31 @@ def evalb(evalb_dir, gold_trees, predicted_trees, ref_gold_path=None):
     return fscore
 
 
-def eval_unlabeled(gold_trees, predicted_trees):
-    from witter.parser import FullEvaluator, Clearer
-    clearer = Clearer(binary=False)
-    evaluator = FullEvaluator(None)
-    gold_trees = [
-        clearer.clear(tree.linearize()) for tree in gold_trees]
-    predicted_trees = [
-        clearer.clear(tree.linearize()) for tree in predicted_trees]
-    return evaluator.evaluate(predicted_trees, gold_trees), gold_trees, predicted_trees
+def evaluate_unlabeled(gold_trees, predicted_trees, compute_level='corpus'):
+    gold_brackets = [fhsutils.get_brackets(item)[0] for item in gold_trees]
+    predicted_brackets = [fhsutils.get_brackets(item)[0] for item in predicted_trees]
+    prec_num = rec_num = prec_denom = rec_denom = f1_num = f1_denom = 0
+    for i, sent in enumerate(gold_brackets):
+        gbset = gold_brackets[i]
+        pbset = predicted_brackets[i]
+        matched = sum([1 if item in pbset else 0 for item in gbset])
+        rec_denom_item = len(gbset)
+        prec_denom_item = len(pbset)
+        if compute_level == 'corpus':
+            prec_num += matched 
+            rec_num += matched 
+            prec_denom += prec_denom_item
+            rec_denom += rec_denom_item
+        elif compute_level == 'sentence':
+            prec_item = 0 if matched == 0 else float(matched) / prec_denom_item
+            rec_item = 0 if matched == 0 else float(matched) / rec_denom_item
+            f1_num += 0 if matched == 0 else 2 * (prec_item * rec_item) / (prec_item + rec_item)
+            f1_denom += 1
+        else:
+            raise Exception('F1 computation method {} not supported'.format(compute_level))
+    if compute_level == 'corpus':
+        prec = 0 if prec_num == 0 else float(prec_num) / prec_denom
+        rec = 0 if rec_num == 0 else float(rec_num) / rec_denom
+        f1_num = 2 * prec * rec
+        f1_denom = prec + rec
+    return 0 if f1_num == 0 else f1_num / f1_denom
