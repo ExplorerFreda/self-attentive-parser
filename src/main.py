@@ -398,8 +398,8 @@ def run_test(args):
 
     print("labeled-fscore {} ".format(test_fscore))
 
-    for rm_punct in [True, False]:
-        for compute_level in ["sentence", "corpus"]:
+    for rm_punct in [True]:
+        for compute_level in ["corpus"]:
             clean_test_treebank = [
                 tokens2list(tree.linearize().replace('(', ' ( ').replace(')', ' ) ').split(), rm_punct) for tree in test_treebank
             ]
@@ -408,6 +408,9 @@ def run_test(args):
             ]
             unlabeled_fscore = evaluate.evaluate_unlabeled(clean_test_treebank, clean_test_predicted, compute_level)
             print("unlabeled-fscore ({} {}) {}".format(rm_punct, compute_level, unlabeled_fscore))
+    for i, tree in enumerate(clean_test_treebank):
+        print(tree2str(tree))
+        print(tree2str(clean_test_predicted[i]))
 
 #%%
 def run_ensemble(args):

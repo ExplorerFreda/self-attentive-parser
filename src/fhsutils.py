@@ -5,6 +5,9 @@ WORD_TAGS = ['CC', 'CD', 'DT', 'EX', 'FW', 'IN', 'JJ', 'JJR', 'JJS', 'LS', 'MD',
              'POS', 'PRP', 'PRP$', 'RB', 'RBR', 'RBS', 'RP', 'SYM', 'TO', 'UH', 'VB', 'VBD', 'VBG', 'VBN', 'VBP', 'VBZ',
              'WDT', 'WP', 'WP$', 'WRB']
 
+PUNCTS = ["``", "-LRB-", "HK$", "A$", "?", ",", "$", "...", "\'\'", "-RRB-", ".", ":", ";", "#", "--", "C$", "-LCB-", "-", "\'",
+          "US$", "!", "`", "-RCB-"]
+
 
 def tokens2list(tokens, rm_punct=False):
     stack = []
@@ -27,7 +30,8 @@ def tokens2list(tokens, rm_punct=False):
             i += 1
         else:
             if rm_punct:
-                if label in WORD_TAGS:
+                # actually mutual exclusive
+                if (label in WORD_TAGS) or (tokens[i] not in PUNCTS):
                     stack.append(tokens[i])
             else:
                 stack.append(tokens[i])
