@@ -1107,7 +1107,8 @@ class NKChartParser(nn.Module):
         glabels = []
         with torch.no_grad():
             for i, (start, end) in enumerate(zip(fp_startpoints, fp_endpoints)):
-                p_i, p_j, p_label, p_augment, g_i, g_j, g_label = self.parse_from_annotations(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], sentences[i], golds[i])
+                p_i, p_j, p_label, p_augment, g_i, g_j, g_label = self.parse_from_annotations(
+                    fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], sentences[i], golds[i])
                 paugment_total += p_augment
                 num_p += p_i.shape[0]
                 pis.append(p_i + start)

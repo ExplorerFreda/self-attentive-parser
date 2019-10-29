@@ -13,7 +13,7 @@ import trees
 import vocabulary
 import nkutil
 import parse_nk
-from fhsutils import tokens2list, tree2str
+from fhsutils import tokens2list, tree2str, get_brackets
 tokens = parse_nk
 
 def torch_load(load_path):
@@ -408,6 +408,10 @@ def run_test(args):
             ]
             unlabeled_fscore = evaluate.evaluate_unlabeled(clean_test_treebank, clean_test_predicted, compute_level)
             print("unlabeled-fscore ({} {}) {}".format(rm_punct, compute_level, unlabeled_fscore))
+    gold_bracket_num = sum([len(get_brackets(x)[0]) for x in clean_test_treebank])
+    predicted_bracket_num = sum([len(get_brackets(x)[0]) for x in clean_test_predicted])
+    print("# gold brackets: {}".format(gold_bracket_num))
+    print("# predicted brackets: {}".format(predicted_bracket_num))
     for i, tree in enumerate(clean_test_treebank):
         print(tree2str(tree))
         print(tree2str(clean_test_predicted[i]))
