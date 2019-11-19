@@ -1,5 +1,6 @@
 import argparse
 import itertools
+import h5py
 import os.path
 import time
 
@@ -84,6 +85,10 @@ def make_hparams():
         bert_model="bert-base-uncased",
         bert_do_lower_case=True,
         bert_transliterate="",
+
+        use_extra_info=False,
+        use_test_only=False,
+        ignore_leaf=False
         )
 
 def run_train(args, hparams):
@@ -120,6 +125,44 @@ def run_train(args, hparams):
     if hparams.max_len_dev > 0:
         dev_treebank = [tree for tree in dev_treebank if len(list(tree.leaves())) <= hparams.max_len_dev]
     print("Loaded {:,} development examples.".format(len(dev_treebank)))
+
+    if hparams.use_extra_info:
+        loaded_train_info = h5py.File(args.train_path + '.hdf5', 'r')
+        loaded_dev_info = h5py.File(args.dev_path + '.hdf5', 'r')
+        assert len(loaded_train_info.keys()) == len(loaded_dev_info.keys())
+        train_info = list()
+        for i in range(len(train_treebank)):
+            item_info = list()
+            for key in sorted(loaded_train_info.keys()):
+                item_info.append(loaded_train_info[key+'/'+str(i)])
+            item_info = np.array(item_info)
+            item_info = np.concatenate(
+                [-1e8 * np.ones((item_info.shape[0], item_info.shape[1], 1)), item_info], 
+                axis=2
+            )
+            item_info = np.concatenate(
+                [item_info, -1e8 * np.ones((item_info.shape[0], 1, item_info.shape[2]))],
+                axis=1
+            )
+            train_info.append(item_info)
+        dev_info = list()
+        for i in range(len(dev_treebank)):
+            item_info = list()
+            for key in sorted(loaded_dev_info.keys()):
+                item_info.append(loaded_dev_info[key+'/'+str(i)])
+            item_info = np.array(item_info)
+            item_info = np.concatenate(
+                [-1e8 * np.ones((item_info.shape[0], item_info.shape[1], 1)), item_info], 
+                axis=2
+            )
+            item_info = np.concatenate(
+                [item_info, -1e8 * np.ones((item_info.shape[0], 1, item_info.shape[2]))],
+                axis=1
+            )
+            dev_info.append(np.array(item_info))
+        print("Loaded and processed extra info from constituency test.")
+    else:
+        train_info = dev_info = None
 
     print("Processing trees for training...")
     train_parse = [tree.convert() for tree in train_treebank]
@@ -201,6 +244,7 @@ def run_train(args, hparams):
         info = torch_load(load_path)
         parser = parse_nk.NKChartParser.from_spec(info['spec'], info['state_dict'])
     else:
+        hparams.test_size = len(loaded_train_info.keys()) if (train_info is not None) else None
         parser = parse_nk.NKChartParser(
             tag_vocab,
             word_vocab,
@@ -257,7 +301,8 @@ def run_train(args, hparams):
         for dev_start_index in range(0, len(dev_treebank), args.eval_batch_size):
             subbatch_trees = dev_treebank[dev_start_index:dev_start_index+args.eval_batch_size]
             subbatch_sentences = [[(leaf.tag, leaf.word) for leaf in tree.leaves()] for tree in subbatch_trees]
-            predicted, _ = parser.parse_batch(subbatch_sentences)
+            subbatch_info = dev_info[dev_start_index:dev_start_index+args.eval_batch_size] if dev_info is not None else None
+            predicted, _ = parser.parse_batch(subbatch_sentences, extra_info=subbatch_info)
             del _
             dev_predicted.extend([p.convert() for p in predicted])
 
@@ -286,18 +331,23 @@ def run_train(args, hparams):
             best_dev_model_path = "{}_dev={:.2f}".format(
                 args.model_path_base, dev_fscore.fscore)
             best_dev_processed = total_processed
-            print("Saving new best model to {}...".format(best_dev_model_path))
-            torch.save({
-                'spec': parser.spec,
-                'state_dict': parser.state_dict(),
-                'trainer' : trainer.state_dict(),
-                }, best_dev_model_path + ".pt")
+            if dev_fscore.fscore > 40:
+                print("Saving new best model to {}...".format(best_dev_model_path))
+                torch.save({
+                    'spec': parser.spec,
+                    'state_dict': parser.state_dict(),
+                    'trainer' : trainer.state_dict(),
+                    }, best_dev_model_path + ".pt")
 
     for epoch in itertools.count(start=1):
         if args.epochs is not None and epoch > args.epochs:
             break
-
-        np.random.shuffle(train_parse)
+        # unified random shuffle
+        args_shuffle = [i for i in range(len(train_parse))]
+        np.random.shuffle(args_shuffle)
+        train_parse = [train_parse[i] for i in args_shuffle]
+        if train_info is not None:
+            train_info = [train_info[i] for i in args_shuffle]
         epoch_start_time = time.time()
 
         for start_index in range(0, len(train_parse), args.batch_size):
@@ -307,10 +357,13 @@ def run_train(args, hparams):
             batch_loss_value = 0.0
             batch_trees = train_parse[start_index:start_index + args.batch_size]
             batch_sentences = [[(leaf.tag, leaf.word) for leaf in tree.leaves()] for tree in batch_trees]
+            batch_info = train_info[start_index:start_index + args.batch_size] if train_info is not None else None
             batch_num_tokens = sum(len(sentence) for sentence in batch_sentences)
 
-            for subbatch_sentences, subbatch_trees in parser.split_batch(batch_sentences, batch_trees, args.subbatch_max_tokens):
-                _, loss = parser.parse_batch(subbatch_sentences, subbatch_trees)
+            for subbatch_sentences, subbatch_trees, subbatch_info in parser.split_batch(batch_sentences, batch_trees, batch_info, args.subbatch_max_tokens):
+                if subbatch_info[0] is None:  # not using extra info 
+                    subbatch_info = None
+                _, loss = parser.parse_batch(subbatch_sentences, subbatch_trees, extra_info=subbatch_info)
 
                 if hparams.predict_tags:
                     loss = loss[0] / len(batch_trees) + loss[1] / batch_num_tokens
@@ -369,15 +422,40 @@ def run_test(args):
     info = torch_load(args.model_path_base)
     assert 'hparams' in info['spec'], "Older savefiles not supported"
     parser = parse_nk.NKChartParser.from_spec(info['spec'], info['state_dict'])
+    hparams = info['spec']['hparams']
+    if ('use_extra_info' in hparams) and hparams['use_extra_info']:
+        loaded_test_info = h5py.File(args.test_path + '.hdf5', 'r')
+        test_info = list()
+        for i in range(len(test_treebank)):
+            item_info = list()
+            for key in sorted(loaded_test_info.keys()):
+                item_info.append(loaded_test_info[key+'/'+str(i)])
+            item_info = np.array(item_info)
+            item_info = np.concatenate(
+                [-1e8 * np.ones((item_info.shape[0], item_info.shape[1], 1)), item_info], 
+                axis=2
+            )
+            item_info = np.concatenate(
+                [item_info, -1e8 * np.ones((item_info.shape[0], 1, item_info.shape[2]))],
+                axis=1
+            )
+            test_info.append(item_info)
+        print("Loaded and processed extra info from constituency test.")
+    else:
+        test_info = None
 
     print("Parsing test sentences...")
     start_time = time.time()
 
     test_predicted = []
     for start_index in range(0, len(test_treebank), args.eval_batch_size):
-        subbatch_trees = test_treebank[start_index:start_index+args.eval_batch_size]
-        subbatch_sentences = [[(leaf.tag, leaf.word) for leaf in tree.leaves()] for tree in subbatch_trees]
-        predicted, _ = parser.parse_batch(subbatch_sentences)
+        try:
+            subbatch_trees = test_treebank[start_index:start_index+args.eval_batch_size]
+            subbatch_sentences = [[(leaf.tag, leaf.word) for leaf in tree.leaves()] for tree in subbatch_trees]
+            subbatch_info = test_info[start_index:start_index+args.eval_batch_size] if test_info is not None else None
+            predicted, _ = parser.parse_batch(subbatch_sentences, extra_info=subbatch_info)
+        except:
+            from IPython import embed; embed(using=False)
         del _
         test_predicted.extend([p.convert() for p in predicted])
 
@@ -576,7 +654,7 @@ def main():
     subparser = subparsers.add_parser("train")
     subparser.set_defaults(callback=lambda args: run_train(args, hparams))
     hparams.populate_arguments(subparser)
-    subparser.add_argument("--numpy-seed", type=int)
+    subparser.add_argument("--numpy-seed", type=int, default=None)
     subparser.add_argument("--model-path-base", required=True)
     subparser.add_argument("--evalb-dir", default="EVALB/")
     subparser.add_argument("--train-path", default="data/02-21.10way.clean")

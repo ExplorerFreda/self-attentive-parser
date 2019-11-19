@@ -14,6 +14,11 @@ class InternalTreebankNode(TreebankNode):
         assert children
         self.children = tuple(children)
 
+    def copy(self):
+        copied_node = InternalTreebankNode(self.label, self.children)
+        copied_node.children = [child.copy() for child in copied_node.children]
+        return copied_node
+
     def linearize(self):
         return "({} {})".format(
             self.label, " ".join(child.linearize() for child in self.children))
@@ -45,6 +50,10 @@ class LeafTreebankNode(TreebankNode):
 
         assert isinstance(word, str)
         self.word = word
+
+    def copy(self):
+        copied_node = LeafTreebankNode(self.tag, self.word)
+        return copied_node
 
     def linearize(self):
         return "({} {})".format(self.tag, self.word)

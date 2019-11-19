@@ -8,7 +8,7 @@ ctypedef np.float32_t DTYPE_t
 ORACLE_PRECOMPUTED_TABLE = {}
 
 @cython.boundscheck(False)
-def decode(int force_gold, int sentence_len, np.ndarray[DTYPE_t, ndim=3] label_scores_chart, int is_train, gold, label_vocab):
+def decode(int force_gold, int sentence_len, np.ndarray[DTYPE_t, ndim=3] label_scores_chart, int is_train, gold, label_vocab, ignore_leaf=False):
     cdef DTYPE_t NEG_INF = -np.inf
 
     # Label scores chart is copied so we can modify it in-place for augmentated decode
@@ -112,7 +112,7 @@ def decode(int force_gold, int sentence_len, np.ndarray[DTYPE_t, ndim=3] label_s
     # use helper functions and recursion
 
     # All fully binarized trees have the same number of nodes
-    cdef int num_tree_nodes = 2 * sentence_len - 1
+    cdef int num_tree_nodes = sentence_len - 1 if ignore_leaf else 2 * sentence_len - 1
     cdef np.ndarray[int, ndim=1] included_i = np.empty(num_tree_nodes, dtype=np.int32)
     cdef np.ndarray[int, ndim=1] included_j = np.empty(num_tree_nodes, dtype=np.int32)
     cdef np.ndarray[int, ndim=1] included_label = np.empty(num_tree_nodes, dtype=np.int32)
@@ -130,6 +130,8 @@ def decode(int force_gold, int sentence_len, np.ndarray[DTYPE_t, ndim=3] label_s
         i = stack_i[stack_idx]
         j = stack_j[stack_idx]
         stack_idx -= 1
+        if ignore_leaf and (j == i + 1):
+            continue
         included_i[idx] = i
         included_j[idx] = j
         included_label[idx] = best_label_chart[i, j]
@@ -148,6 +150,8 @@ def decode(int force_gold, int sentence_len, np.ndarray[DTYPE_t, ndim=3] label_s
         running_total += label_scores_chart[included_i[idx], included_j[idx], included_label[idx]]
 
     cdef DTYPE_t score = value_chart[0, sentence_len]
+    for idx in range(sentence_len):
+        score -= value_chart[idx, idx+1]
     cdef DTYPE_t augment_amount = round(score - running_total)
 
     return score, included_i.astype(int), included_j.astype(int), included_label.astype(int), augment_amount

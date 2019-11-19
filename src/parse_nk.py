@@ -758,6 +758,20 @@ class NKChartParser(nn.Module):
             nn.Linear(hparams.d_label_hidden, label_vocab.size - 1),
             )
 
+        if hparams.test_size is not None:
+            self.f_attn = nn.Sequential(nn.Linear(hparams.d_model, hparams.d_label_hidden),
+            LayerNormalization(hparams.d_label_hidden),
+            nn.ReLU(),
+            nn.Linear(hparams.d_label_hidden, (hparams.test_size + 1) * label_vocab.size),
+            )
+        else:
+            self.f_attn = None
+
+        if hparams.use_test_only:
+            self.f_trans_tests = nn.Linear(hparams.test_size, 1)
+        else:
+            self.f_trans_tests = None
+
         if hparams.predict_tags:
             assert not hparams.use_tags, "use_tags and predict_tags are mutually exclusive"
             self.f_tag = nn.Sequential(
@@ -797,6 +811,10 @@ class NKChartParser(nn.Module):
             hparams['predict_tags'] = False
         if 'bert_transliterate' not in hparams:
             hparams['bert_transliterate'] = ""
+        if 'use_test_only' not in hparams:
+            hparams['use_test_only'] = False
+        if 'ignore_leaf' not in hparams:
+            hparams['ignore_leaf'] = False
 
         spec['hparams'] = nkutil.HParams(**hparams)
         res = cls(**spec)
@@ -812,7 +830,7 @@ class NKChartParser(nn.Module):
             res.cuda()
         return res
 
-    def split_batch(self, sentences, golds, subbatch_max_tokens=3000):
+    def split_batch(self, sentences, golds, infos, subbatch_max_tokens=3000):
         if self.bert is not None:
             lens = [
                 len(self.bert_tokenizer.tokenize(' '.join([word for (_, word) in sentence]))) + 2
@@ -828,7 +846,10 @@ class NKChartParser(nn.Module):
         subbatch_size = 1
         while lens_argsort:
             if (subbatch_size == len(lens_argsort)) or (subbatch_size * lens[lens_argsort[subbatch_size]] > subbatch_max_tokens):
-                yield [sentences[i] for i in lens_argsort[:subbatch_size]], [golds[i] for i in lens_argsort[:subbatch_size]]
+                if infos is None:
+                    yield [sentences[i] for i in lens_argsort[:subbatch_size]], [golds[i] for i in lens_argsort[:subbatch_size]], [None for i in lens_argsort[:subbatch_size]]
+                else:
+                    yield [sentences[i] for i in lens_argsort[:subbatch_size]], [golds[i] for i in lens_argsort[:subbatch_size]], [infos[i] for i in lens_argsort[:subbatch_size]]
                 lens_argsort = lens_argsort[subbatch_size:]
                 num_subbatches += 1
                 subbatch_size = 1
@@ -839,7 +860,7 @@ class NKChartParser(nn.Module):
         tree_list, loss_list = self.parse_batch([sentence], [gold] if gold is not None else None)
         return tree_list[0], loss_list[0]
 
-    def parse_batch(self, sentences, golds=None, return_label_scores_charts=False):
+    def parse_batch(self, sentences, golds=None, return_label_scores_charts=False, extra_info=None):
         is_train = golds is not None
         self.train(is_train)
         torch.set_grad_enabled(is_train)
@@ -1015,7 +1036,8 @@ class NKChartParser(nn.Module):
             all_word_end_mask = from_numpy(np.ascontiguousarray(all_word_end_mask[:, :subword_max_len]))
             all_encoder_layers, _ = self.bert(all_input_ids, attention_mask=all_input_mask)
             del _
-            features = all_encoder_layers[-1]
+            # TODO(freda): weighing strategy
+            features = all_encoder_layers[-1]  # use the last layer of bert
 
             if self.encoder is not None:
                 features_packed = features.masked_select(all_word_end_mask.to(torch.uint8).unsqueeze(-1)).reshape(-1, features.shape[-1])
@@ -1067,11 +1089,13 @@ class NKChartParser(nn.Module):
         if return_label_scores_charts:
             charts = []
             for i, (start, end) in enumerate(zip(fp_startpoints, fp_endpoints)):
-                chart = self.label_scores_from_annotations(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:])
+                chart = self.label_scores_from_annotations(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], 
+                    extra_info=None if extra_info is None else extra_info[i])
                 charts.append(chart.cpu().data.numpy())
             return charts
 
         if not is_train:
+            # TODO(freda) add attn across extra info here
             trees = []
             scores = []
             if self.f_tag is not None:
@@ -1084,7 +1108,10 @@ class NKChartParser(nn.Module):
                 sentence = sentences[i]
                 if self.f_tag is not None:
                     sentence = list(zip(per_sentence_tags[i], [x[1] for x in sentence]))
-                tree, score = self.parse_from_annotations(fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], sentence, golds[i])
+                tree, score = self.parse_from_annotations(
+                    fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], sentence, golds[i], 
+                    extra_info=None if extra_info is None else extra_info[i]
+                )
                 trees.append(tree)
                 scores.append(score)
             return trees, scores
@@ -1105,10 +1132,15 @@ class NKChartParser(nn.Module):
         gis = []
         gjs = []
         glabels = []
+        if extra_info is not None:
+            pextras = []
+            gextras = []
         with torch.no_grad():
             for i, (start, end) in enumerate(zip(fp_startpoints, fp_endpoints)):
                 p_i, p_j, p_label, p_augment, g_i, g_j, g_label = self.parse_from_annotations(
-                    fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], sentences[i], golds[i])
+                    fencepost_annotations_start[start:end,:], fencepost_annotations_end[start:end,:], sentences[i], golds[i], 
+                    extra_info=None if extra_info is None else extra_info[i]
+                )
                 paugment_total += p_augment
                 num_p += p_i.shape[0]
                 pis.append(p_i + start)
@@ -1117,16 +1149,39 @@ class NKChartParser(nn.Module):
                 gjs.append(g_j + start)
                 plabels.append(p_label)
                 glabels.append(g_label)
-
+                if extra_info is not None:
+                    pextras.append(extra_info[i][:, p_i, p_j].T)
+                    gextras.append(extra_info[i][:, g_i, g_j].T)
+        
         cells_i = from_numpy(np.concatenate(pis + gis))
         cells_j = from_numpy(np.concatenate(pjs + gjs))
         cells_label = from_numpy(np.concatenate(plabels + glabels))
+        span_features = fencepost_annotations_end[cells_j] - fencepost_annotations_start[cells_i]
 
-        cells_label_scores = self.f_label(fencepost_annotations_end[cells_j] - fencepost_annotations_start[cells_i])
-        cells_label_scores = torch.cat([
-                    cells_label_scores.new_zeros((cells_label_scores.size(0), 1)),
-                    cells_label_scores
-                    ], 1)
+        if self.spec['hparams']['use_test_only']:
+            weights = self.f_attn(span_features).reshape(*(list(span_features.shape[:-1]) + [self.label_vocab.size, -1]))
+            cells_extra_info = from_numpy(np.concatenate(pextras + gextras, axis=0)).float().unsqueeze(1)
+            expand_shape = list(cells_extra_info.shape)
+            expand_shape[1] = self.label_vocab.size
+            cells_extra_info = cells_extra_info.expand(expand_shape)
+            expand_shape[-1] = 1
+            cells_label_feats = torch.cat([cells_extra_info.new_ones(*expand_shape), cells_extra_info], dim=-1)
+            cells_label_scores = (weights * cells_label_feats).sum(-1)
+        else:
+            cells_label_scores = self.f_label(span_features)
+            cells_label_scores = torch.cat([
+                        cells_label_scores.new_zeros((cells_label_scores.size(0), 1)),
+                        cells_label_scores
+                        ], 1)
+            if extra_info is not None:
+                attn = self.f_attn(span_features).reshape(*(list(cells_label_scores.shape) + [-1])).softmax(-1)
+                cells_extra_info = from_numpy(np.concatenate(pextras + gextras, axis=0)).float().unsqueeze(1)
+                cells_label_scores = cells_label_scores.unsqueeze(-1)
+                expand_shape = list(cells_extra_info.shape)
+                expand_shape[1] = cells_label_scores.shape[1]
+                cells_extra_info = cells_extra_info.expand(expand_shape)
+                cells_label_scores = (attn * torch.cat([cells_label_scores, cells_extra_info], dim=-1)).sum(-1)
+        
         cells_scores = torch.gather(cells_label_scores, 1, cells_label[:, None])
         loss = cells_scores[:num_p].sum() - cells_scores[num_p:].sum() + paugment_total
 
@@ -1135,22 +1190,42 @@ class NKChartParser(nn.Module):
         else:
             return None, loss
 
-    def label_scores_from_annotations(self, fencepost_annotations_start, fencepost_annotations_end):
+    def label_scores_from_annotations(self, fencepost_annotations_start, fencepost_annotations_end, extra_info=None):
         # Note that the bias added to the final layer norm is useless because
         # this subtraction gets rid of it
         span_features = (torch.unsqueeze(fencepost_annotations_end, 0)
                          - torch.unsqueeze(fencepost_annotations_start, 1))
 
-        label_scores_chart = self.f_label(span_features)
-        label_scores_chart = torch.cat([
-            label_scores_chart.new_zeros((label_scores_chart.size(0), label_scores_chart.size(1), 1)),
-            label_scores_chart
-            ], 2)
+        if self.spec['hparams']['use_test_only']:
+            weights = self.f_attn(span_features).reshape(*(list(span_features.shape[:-1]) + [self.label_vocab.size, -1]))
+            extra_info = from_numpy(extra_info).float().transpose(0, 1).transpose(1, 2).unsqueeze(2)
+            expand_shape = list(extra_info.shape)
+            expand_shape[2] = self.label_vocab.size
+            extra_info = extra_info.expand(expand_shape)
+            expand_shape[-1] = 1
+            label_scores_feats = torch.cat([extra_info.new_ones(*expand_shape), extra_info], dim=-1)
+            label_scores_chart = (weights * label_scores_feats).sum(-1)
+        else:
+            label_scores_chart_model = self.f_label(span_features)
+            label_scores_chart_model = torch.cat([
+                label_scores_chart_model.new_zeros((label_scores_chart_model.size(0), label_scores_chart_model.size(1), 1)),
+                label_scores_chart_model
+                ], 2)
+            if extra_info is not None:
+                attn = self.f_attn(span_features).reshape(*(list(label_scores_chart_model.shape) + [-1])).softmax(-1)
+                label_scores_chart_model = label_scores_chart_model.unsqueeze(-1)
+                extra_info = from_numpy(extra_info).float().transpose(0, 1).transpose(1, 2).unsqueeze(2)
+                expand_shape = list(extra_info.shape)
+                expand_shape[2] = label_scores_chart_model.shape[2]
+                extra_info = extra_info.expand(expand_shape)
+                label_scores_chart = (attn * torch.cat([label_scores_chart_model, extra_info], dim=-1)).sum(-1)
+            else:
+                label_scores_chart = label_scores_chart_model
         return label_scores_chart
 
-    def parse_from_annotations(self, fencepost_annotations_start, fencepost_annotations_end, sentence, gold=None):
+    def parse_from_annotations(self, fencepost_annotations_start, fencepost_annotations_end, sentence, gold=None, extra_info=None):
         is_train = gold is not None
-        label_scores_chart = self.label_scores_from_annotations(fencepost_annotations_start, fencepost_annotations_end)
+        label_scores_chart = self.label_scores_from_annotations(fencepost_annotations_start, fencepost_annotations_end, extra_info)
         label_scores_chart_np = label_scores_chart.cpu().data.numpy()
 
         if is_train:
@@ -1159,10 +1234,11 @@ class NKChartParser(nn.Module):
                 label_scores_chart=label_scores_chart_np,
                 gold=gold,
                 label_vocab=self.label_vocab,
-                is_train=is_train)
+                is_train=is_train,
+                ignore_leaf=self.spec['hparams']['ignore_leaf'])
 
             p_score, p_i, p_j, p_label, p_augment = chart_helper.decode(False, **decoder_args)
-            g_score, g_i, g_j, g_label, g_augment = chart_helper.decode(True, **decoder_args)
+            g_score, g_i, g_j, g_label, g_augment = chart_helper.decode(True, **decoder_args)                
             return p_i, p_j, p_label, p_augment, g_i, g_j, g_label
         else:
             return self.decode_from_chart(sentence, label_scores_chart_np)
@@ -1216,3 +1292,6 @@ class NKChartParser(nn.Module):
 
         tree = make_tree()[0]
         return tree, score
+
+
+#%%
