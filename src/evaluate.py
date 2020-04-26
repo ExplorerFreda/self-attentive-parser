@@ -29,7 +29,7 @@ def evalb(evalb_dir, gold_trees, predicted_trees, ref_gold_path=None):
     assert os.path.exists(evalb_program_path) or os.path.exists(evalb_spmrl_program_path)
 
     if os.path.exists(evalb_program_path):
-        evalb_param_path = os.path.join(evalb_dir, "nk.prm")
+        evalb_param_path = os.path.join(evalb_dir, "fhs.prm")
     else:
         evalb_program_path = evalb_spmrl_program_path
         evalb_param_path = os.path.join(evalb_dir, "spmrl.prm")
