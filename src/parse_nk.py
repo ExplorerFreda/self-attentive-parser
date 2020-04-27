@@ -622,6 +622,18 @@ class Encoder(nn.Module):
 # %%
 
 class NKChartParser(nn.Module):
+    bert_tokenizer = None
+    bert = None
+
+    @classmethod 
+    def initialize_bert(cls, hparams):
+        if isinstance(hparams, dict):
+            cls.bert_tokenizer, cls.bert = get_bert(hparams['bert_model'], hparams['bert_do_lower_case'])
+        else:
+            cls.bert_tokenizer, cls.bert = get_bert(hparams.bert_model, hparams.bert_do_lower_case)
+        if torch.cuda.is_available():
+            cls.bert = cls.bert.cuda()
+
     # We never actually call forward() end-to-end as is typical for pytorch
     # modules, but this inheritance brings in good stuff like state dict
     # management.
@@ -675,7 +687,6 @@ class NKChartParser(nn.Module):
 
         self.char_encoder = None
         self.elmo = None
-        self.bert = None
         if hparams.use_chars_lstm:
             assert not hparams.use_elmo, "use_chars_lstm and use_elmo are mutually exclusive"
             assert not hparams.use_bert, "use_chars_lstm and use_bert are mutually exclusive"
@@ -708,7 +719,7 @@ class NKChartParser(nn.Module):
             # the projection trainable appears to improve parsing accuracy
             self.project_elmo = nn.Linear(d_elmo_annotations, self.d_content, bias=False)
         elif hparams.use_bert or hparams.use_bert_only:
-            self.bert_tokenizer, self.bert = get_bert(hparams.bert_model, hparams.bert_do_lower_case)
+            self.initialize_bert(hparams)
             if hparams.bert_transliterate:
                 from transliterate import TRANSLITERATIONS
                 self.bert_transliterate = TRANSLITERATIONS[hparams.bert_transliterate]

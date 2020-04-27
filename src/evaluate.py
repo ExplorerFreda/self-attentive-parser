@@ -110,5 +110,6 @@ def evalb(evalb_dir, gold_trees, predicted_trees, ref_gold_path=None):
         print("Gold path: {}".format(gold_path))
         print("Predicted path: {}".format(predicted_path))
         print("Output path: {}".format(output_path))
+        from IPython import embed; embed(using=False)
 
     return fscore

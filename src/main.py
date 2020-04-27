@@ -83,6 +83,9 @@ def make_hparams():
         bert_model="bert-base-uncased",
         bert_do_lower_case=True,
         bert_transliterate="",
+
+        lr_steps=100,
+        lr_factor=0.5
         )
 
 def run_train(args, hparams):
@@ -221,12 +224,7 @@ def run_train(args, hparams):
     assert hparams.step_decay, "Only step_decay schedule is supported"
 
     warmup_coeff = hparams.learning_rate / hparams.learning_rate_warmup_steps
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        trainer, 'max',
-        factor=hparams.step_decay_factor,
-        patience=hparams.step_decay_patience,
-        verbose=True,
-    )
+    scheduler = torch.optim.lr_scheduler.StepLR(trainer, hparams.lr_steps, hparams.lr_factor)
     def schedule_lr(iteration):
         iteration = iteration + 1
         if iteration <= hparams.learning_rate_warmup_steps:
@@ -352,10 +350,7 @@ def run_train(args, hparams):
 
         # adjust learning rate at the end of an epoch
         if (total_processed // args.batch_size + 1) > hparams.learning_rate_warmup_steps:
-            scheduler.step(best_dev_fscore)
-            if (total_processed - best_dev_processed) > ((hparams.step_decay_patience + 1) * hparams.max_consecutive_decays * len(train_parse)):
-                print("Terminating due to lack of improvement in dev fscore.")
-                break
+            scheduler.step()
 
 def run_test(args):
     print("Loading test trees from {}...".format(args.test_path))
