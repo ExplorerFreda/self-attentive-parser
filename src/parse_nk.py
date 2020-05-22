@@ -564,17 +564,6 @@ def get_elmo_class():
     return Elmo
 
 # %%
-def get_bert(bert_model, bert_do_lower_case):
-    # Avoid a hard dependency on BERT by only importing it if it's being used
-    from pytorch_pretrained_bert import BertTokenizer, BertModel
-    if bert_model.endswith('.tar.gz'):
-        tokenizer = BertTokenizer.from_pretrained(bert_model.replace('.tar.gz', '-vocab.txt'), do_lower_case=bert_do_lower_case)
-    else:
-        tokenizer = BertTokenizer.from_pretrained(bert_model, do_lower_case=bert_do_lower_case)
-    bert = BertModel.from_pretrained(bert_model)
-    return tokenizer, bert
-
-# %%
 
 class Encoder(nn.Module):
     def __init__(self, embedding,
@@ -622,17 +611,15 @@ class Encoder(nn.Module):
 # %%
 
 class NKChartParser(nn.Module):
-    bert_tokenizer = None
     bert = None
 
+    # WARNING: in this branch bert is no BERT, just external word embeddings
     @classmethod 
     def initialize_bert(cls, hparams):
         if isinstance(hparams, dict):
-            cls.bert_tokenizer, cls.bert = get_bert(hparams['bert_model'], hparams['bert_do_lower_case'])
+            cls.bert = torch.load(hparams['bert_model'])
         else:
-            cls.bert_tokenizer, cls.bert = get_bert(hparams.bert_model, hparams.bert_do_lower_case)
-        if torch.cuda.is_available():
-            cls.bert = cls.bert.cuda()
+            cls.bert = torch.load(hparams.bert_model)
 
     # We never actually call forward() end-to-end as is typical for pytorch
     # modules, but this inheritance brings in good stuff like state dict
@@ -720,14 +707,11 @@ class NKChartParser(nn.Module):
             self.project_elmo = nn.Linear(d_elmo_annotations, self.d_content, bias=False)
         elif hparams.use_bert or hparams.use_bert_only:
             self.initialize_bert(hparams)
-            if hparams.bert_transliterate:
-                from transliterate import TRANSLITERATIONS
-                self.bert_transliterate = TRANSLITERATIONS[hparams.bert_transliterate]
-            else:
-                self.bert_transliterate = None
+            self.bert_transliterate = None
 
-            d_bert_annotations = self.bert.pooler.dense.in_features
-            self.bert_max_len = self.bert.embeddings.position_embeddings.num_embeddings
+            d_bert_annotations = len(self.bert['a'])
+            self.d_bert_annotations = d_bert_annotations
+            self.bert_max_len = 500
 
             if hparams.use_bert_only:
                 self.project_bert = nn.Linear(d_bert_annotations, hparams.d_model, bias=False)
@@ -824,13 +808,7 @@ class NKChartParser(nn.Module):
         return res
 
     def split_batch(self, sentences, golds, subbatch_max_tokens=3000):
-        if self.bert is not None:
-            lens = [
-                len(self.bert_tokenizer.tokenize(' '.join([word for (_, word) in sentence]))) + 2
-                for sentence in sentences
-            ]
-        else:
-            lens = [len(sentence) + 2 for sentence in sentences]
+        lens = [len(sentence) + 2 for sentence in sentences]
 
         lens = np.asarray(lens, dtype=int)
         lens_argsort = np.argsort(lens).tolist()
@@ -964,6 +942,7 @@ class NKChartParser(nn.Module):
             all_input_mask = np.zeros((len(sentences), self.bert_max_len), dtype=int)
             all_word_start_mask = np.zeros((len(sentences), self.bert_max_len), dtype=int)
             all_word_end_mask = np.zeros((len(sentences), self.bert_max_len), dtype=int)
+            features = np.zeros((len(sentences), self.bert_max_len, self.d_bert_annotations), dtype=float)
 
             subword_max_len = 0
             for snum, sentence in enumerate(sentences):
@@ -975,28 +954,10 @@ class NKChartParser(nn.Module):
                 word_start_mask.append(1)
                 word_end_mask.append(1)
 
-                if self.bert_transliterate is None:
-                    cleaned_words = []
-                    for _, word in sentence:
-                        word = BERT_TOKEN_MAPPING.get(word, word)
-                        # This un-escaping for / and * was not yet added for the
-                        # parser version in https://arxiv.org/abs/1812.11760v1
-                        # and related model releases (e.g. benepar_en2)
-                        word = word.replace('\\/', '/').replace('\\*', '*')
-                        # Mid-token punctuation occurs in biomedical text
-                        word = word.replace('-LSB-', '[').replace('-RSB-', ']')
-                        word = word.replace('-LRB-', '(').replace('-RRB-', ')')
-                        if word == "n't" and cleaned_words:
-                            cleaned_words[-1] = cleaned_words[-1] + "n"
-                            word = "'t"
-                        cleaned_words.append(word)
-                else:
-                    # When transliterating, assume that the token mapping is
-                    # taken care of elsewhere
-                    cleaned_words = [self.bert_transliterate(word) for _, word in sentence]
+                cleaned_words = [word for _, word in sentence]
 
                 for word in cleaned_words:
-                    word_tokens = self.bert_tokenizer.tokenize(word)
+                    word_tokens = [word.lower()]
                     for _ in range(len(word_tokens)):
                         word_start_mask.append(0)
                         word_end_mask.append(0)
@@ -1007,26 +968,23 @@ class NKChartParser(nn.Module):
                 word_start_mask.append(1)
                 word_end_mask.append(1)
 
-                input_ids = self.bert_tokenizer.convert_tokens_to_ids(tokens)
+                sent_features = np.concatenate([self.bert.get(token, self.bert['[PAD]']).reshape(1, -1) for token in tokens], axis=0)
 
                 # The mask has 1 for real tokens and 0 for padding tokens. Only real
                 # tokens are attended to.
-                input_mask = [1] * len(input_ids)
+                input_mask = [1] * len(tokens)
 
-                subword_max_len = max(subword_max_len, len(input_ids))
+                subword_max_len = max(subword_max_len, len(tokens))
 
-                all_input_ids[snum, :len(input_ids)] = input_ids
+                features[snum, :len(sent_features), :] = sent_features
                 all_input_mask[snum, :len(input_mask)] = input_mask
                 all_word_start_mask[snum, :len(word_start_mask)] = word_start_mask
                 all_word_end_mask[snum, :len(word_end_mask)] = word_end_mask
 
-            all_input_ids = from_numpy(np.ascontiguousarray(all_input_ids[:, :subword_max_len]))
             all_input_mask = from_numpy(np.ascontiguousarray(all_input_mask[:, :subword_max_len]))
             all_word_start_mask = from_numpy(np.ascontiguousarray(all_word_start_mask[:, :subword_max_len]))
             all_word_end_mask = from_numpy(np.ascontiguousarray(all_word_end_mask[:, :subword_max_len]))
-            all_encoder_layers, _ = self.bert(all_input_ids, attention_mask=all_input_mask)
-            del _
-            features = all_encoder_layers[-1]
+            features = from_numpy(np.ascontiguousarray(features[:, :subword_max_len])).float()
 
             if self.encoder is not None:
                 features_packed = features.masked_select(all_word_end_mask.to(torch.uint8).unsqueeze(-1)).reshape(-1, features.shape[-1])
