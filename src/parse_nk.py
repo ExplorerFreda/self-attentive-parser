@@ -570,6 +570,7 @@ def get_bert(bert_model, bert_do_lower_case):
         tokenizer = AutoTokenizer.from_pretrained(bert_model.replace('.tar.gz', '-vocab.txt'), do_lower_case=bert_do_lower_case)
     else:
         tokenizer = AutoTokenizer.from_pretrained(bert_model, do_lower_case=bert_do_lower_case)
+    print('Do lower case:', bert_do_lower_case)
     bert = AutoModel.from_pretrained(bert_model)
     return tokenizer, bert
 
@@ -980,6 +981,8 @@ class NKChartParser(nn.Module):
                 word_start_mask = []
                 word_end_mask = []
 
+                if self.bert_tokenizer.bos_token is None:
+                    self.bert_tokenizer.bos_token = self.bert_tokenizer.cls_token
                 tokens.append(self.bert_tokenizer.bos_token)
                 word_start_mask.append(1)
                 word_end_mask.append(1)
@@ -1012,6 +1015,8 @@ class NKChartParser(nn.Module):
                         word_start_mask[len(tokens)] = 1
                     word_end_mask[-1] = 1
                     tokens.extend(word_tokens)
+                if self.bert_tokenizer.eos_token is None:
+                    self.bert_tokenizer.eos_token = self.bert_tokenizer.sep_token
                 tokens.append(self.bert_tokenizer.eos_token)
                 word_start_mask.append(1)
                 word_end_mask.append(1)

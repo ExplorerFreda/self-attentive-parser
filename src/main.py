@@ -115,7 +115,7 @@ def run_train(args, hparams):
         print("WARNING: The data distributed with this repository contains "
               "predicted part-of-speech tags only (not gold tags!) We do not "
               "recommend enabling predict_tags in this configuration.")
-    train_treebank = trees.load_trees(args.train_path)
+    train_treebank = trees.load_trees(args.train_path_form_vocab)
     if hparams.max_len_train > 0:
         train_treebank = [tree for tree in train_treebank if len(list(tree.leaves())) <= hparams.max_len_train]
     print("Loaded {:,} training examples.".format(len(train_treebank)))
@@ -223,6 +223,14 @@ def run_train(args, hparams):
     word_vocab.freeze()
     label_vocab.freeze()
     char_vocab.freeze()
+
+    train_treebank = trees.load_trees(args.train_path)
+    if hparams.max_len_train > 0:
+        train_treebank = [tree for tree in train_treebank if len(list(tree.leaves())) <= hparams.max_len_train]
+    print("Reloaded {:,} training examples.".format(len(train_treebank)))
+    
+    print("Processing trees for training...")
+    train_parse = [tree.convert() for tree in train_treebank]
 
     def print_vocabulary(name, vocab):
         special = {tokens.START, tokens.STOP, tokens.UNK}
@@ -660,6 +668,7 @@ def main():
     subparser.add_argument("--model-path-base", required=True)
     subparser.add_argument("--evalb-dir", default="EVALB/")
     subparser.add_argument("--train-path", default="data/02-21.10way.clean")
+    subparser.add_argument("--train-path-form-vocab", default="data/02-21.10way.clean")
     subparser.add_argument("--dev-path", default="data/22.auto.clean")
     subparser.add_argument("--batch-size", type=int, default=250)
     subparser.add_argument("--subbatch-max-tokens", type=int, default=2000)
