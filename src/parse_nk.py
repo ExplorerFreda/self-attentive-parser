@@ -296,7 +296,7 @@ class MultiHeadAttention(nn.Module):
         q_padded = q_s.new_zeros((n_head, mb_size, len_padded, d_k))
         k_padded = k_s.new_zeros((n_head, mb_size, len_padded, d_k))
         v_padded = v_s.new_zeros((n_head, mb_size, len_padded, d_v))
-        invalid_mask = q_s.new_ones((mb_size, len_padded), dtype=torch.uint8)
+        invalid_mask = q_s.new_ones((mb_size, len_padded), dtype=torch.bool)
 
         for i, (start, end) in enumerate(zip(batch_idxs.boundaries_np[:-1], batch_idxs.boundaries_np[1:])):
             q_padded[:,i,:end-start,:] = q_s[:,start:end,:]
@@ -352,7 +352,6 @@ class MultiHeadAttention(nn.Module):
             )
         outputs = outputs_padded[output_mask]
         outputs = self.combine_v(outputs)
-
         outputs = self.residual_dropout(outputs, batch_idxs)
 
         return self.layer_norm(outputs + residual), attns_padded
@@ -566,12 +565,12 @@ def get_elmo_class():
 # %%
 def get_bert(bert_model, bert_do_lower_case):
     # Avoid a hard dependency on BERT by only importing it if it's being used
-    from pytorch_pretrained_bert import BertTokenizer, BertModel
+    from transformers import AutoModel, AutoTokenizer
     if bert_model.endswith('.tar.gz'):
-        tokenizer = BertTokenizer.from_pretrained(bert_model.replace('.tar.gz', '-vocab.txt'), do_lower_case=bert_do_lower_case)
+        tokenizer = AutoTokenizer.from_pretrained(bert_model.replace('.tar.gz', '-vocab.txt'), do_lower_case=bert_do_lower_case)
     else:
-        tokenizer = BertTokenizer.from_pretrained(bert_model, do_lower_case=bert_do_lower_case)
-    bert = BertModel.from_pretrained(bert_model)
+        tokenizer = AutoTokenizer.from_pretrained(bert_model, do_lower_case=bert_do_lower_case)
+    bert = AutoModel.from_pretrained(bert_model)
     return tokenizer, bert
 
 # %%
@@ -981,7 +980,7 @@ class NKChartParser(nn.Module):
                 word_start_mask = []
                 word_end_mask = []
 
-                tokens.append("[CLS]")
+                tokens.append(self.bert_tokenizer.bos_token)
                 word_start_mask.append(1)
                 word_end_mask.append(1)
 
@@ -1013,7 +1012,7 @@ class NKChartParser(nn.Module):
                         word_start_mask[len(tokens)] = 1
                     word_end_mask[-1] = 1
                     tokens.extend(word_tokens)
-                tokens.append("[SEP]")
+                tokens.append(self.bert_tokenizer.eos_token)
                 word_start_mask.append(1)
                 word_end_mask.append(1)
 
@@ -1034,13 +1033,12 @@ class NKChartParser(nn.Module):
             all_input_mask = from_numpy(np.ascontiguousarray(all_input_mask[:, :subword_max_len]))
             all_word_start_mask = from_numpy(np.ascontiguousarray(all_word_start_mask[:, :subword_max_len]))
             all_word_end_mask = from_numpy(np.ascontiguousarray(all_word_end_mask[:, :subword_max_len]))
-            all_encoder_layers, _ = self.bert(all_input_ids, attention_mask=all_input_mask)
-            del _
+            outp = self.bert(all_input_ids, attention_mask=all_input_mask)
             # TODO(freda): weighing strategy
-            features = all_encoder_layers[-1]  # use the last layer of bert
+            features = outp.last_hidden_state  # use the last layer of bert
 
             if self.encoder is not None:
-                features_packed = features.masked_select(all_word_end_mask.to(torch.uint8).unsqueeze(-1)).reshape(-1, features.shape[-1])
+                features_packed = features.masked_select(all_word_end_mask.bool().unsqueeze(-1)).reshape(-1, features.shape[-1])
 
                 # For now, just project the features from the last word piece in each word
                 extra_content_annotations = self.project_bert(features_packed)
@@ -1069,8 +1067,8 @@ class NKChartParser(nn.Module):
         else:
             assert self.bert is not None
             features = self.project_bert(features)
-            fencepost_annotations_start = features.masked_select(all_word_start_mask.to(torch.uint8).unsqueeze(-1)).reshape(-1, features.shape[-1])
-            fencepost_annotations_end = features.masked_select(all_word_end_mask.to(torch.uint8).unsqueeze(-1)).reshape(-1, features.shape[-1])
+            fencepost_annotations_start = features.masked_select(all_word_start_mask.bool().unsqueeze(-1)).reshape(-1, features.shape[-1])
+            fencepost_annotations_end = features.masked_select(all_word_end_mask.bool().unsqueeze(-1)).reshape(-1, features.shape[-1])
             if self.f_tag is not None:
                 tag_annotations = fencepost_annotations_end
 

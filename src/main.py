@@ -361,25 +361,21 @@ def run_train(args, hparams):
             batch_num_tokens = sum(len(sentence) for sentence in batch_sentences)
 
             for subbatch_sentences, subbatch_trees, subbatch_info in parser.split_batch(batch_sentences, batch_trees, batch_info, args.subbatch_max_tokens):
-                try:
-                    if subbatch_info[0] is None:  # not using extra info 
-                        subbatch_info = None
-                    _, loss = parser.parse_batch(subbatch_sentences, subbatch_trees, extra_info=subbatch_info)
-    
-                    if hparams.predict_tags:
-                        loss = loss[0] / len(batch_trees) + loss[1] / batch_num_tokens
-                    else:
-                        loss = loss / len(batch_trees)
-                    loss_value = float(loss.data.cpu().numpy())
-                    batch_loss_value += loss_value
-                    if loss_value > 0:
-                        loss.backward()
-                    del loss
-                    total_processed += len(subbatch_trees)
-                    current_processed += len(subbatch_trees)
-                except:
-                    print('Something wrong happened with the data, but can be ignored anyway.')
-                    continue
+                if subbatch_info[0] is None:  # not using extra info 
+                    subbatch_info = None
+                _, loss = parser.parse_batch(subbatch_sentences, subbatch_trees, extra_info=subbatch_info)
+                
+                if hparams.predict_tags:
+                    loss = loss[0] / len(batch_trees) + loss[1] / batch_num_tokens
+                else:
+                    loss = loss / len(batch_trees)
+                loss_value = float(loss.data.cpu().numpy())
+                batch_loss_value += loss_value
+                if loss_value > 0:
+                    loss.backward()
+                del loss
+                total_processed += len(subbatch_trees)
+                current_processed += len(subbatch_trees)
 
             grad_norm = torch.nn.utils.clip_grad_norm_(clippable_parameters, grad_clip_threshold)
 
